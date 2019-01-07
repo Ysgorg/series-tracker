@@ -48,11 +48,17 @@ class Episode:
             return
         info = BeautifulSoup(html, 'html.parser').find(id="next_episode")
         if info:
-            lines = [l.strip() for l in info.get_text().split('\n') if l][1:-1]
+            lines = [l.strip() for l in info.get_text().split('\n') if l and not "Local Time" in l][1:-1]
             self.name = lines[0].split(':')[1]
             self.season = int(lines[3].split(':')[1])
-            self.episode = int(lines[4].split(':')[1])
-            self.time = self.get_time_string(' '.join(lines[2].split(' ')[1:]))
+            episode_line = lines[4].split(':')[1]
+            try:
+                self.episode_id = ','.join(['E%02d'%e for e in [int(v.strip()) for v in episode_line.split(',')]])
+            except:
+                self.episode_id = episode_line
+
+            time_line = lines[2].replace("Local Date", "Date") if "Local Date" in lines[2] else lines[2]
+            self.time = self.get_time_string(' '.join(time_line.split(' ')[1:]))
         else:
             self.error = Exception('No episode info found')
 
@@ -65,7 +71,7 @@ class Episode:
         elif self.error:
             print('%s Error: %s' % (pre, str(self.error)))
         else:
-            episode_code = 'S%02dE%02d' % (self.season, self.episode)
+            episode_code = 'S%02d %s' % (self.season, self.episode_id)
             formated_time = str(self.time).split(' ')[0]
             print('%s %s %s' % (pre, episode_code, formated_time))
 
