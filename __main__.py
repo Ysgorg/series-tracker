@@ -1,103 +1,165 @@
-from urllib import request, parse
+import functools
+from typing import Union, List
+import requests
 from bs4 import BeautifulSoup
-from dateutil import parser
 from datetime import datetime
+from tabulate import tabulate
 import os
 
-CONFIG_FILENAME = '%s/series.txt'%os.path.dirname(os.path.realpath(__file__))
+# path to the list of files
+CONFIG_FILENAME = '%s/series.txt' % os.path.dirname(os.path.realpath(__file__))
+
+# strings found in next-episode.net pages
 TBA = 'Sorry, no info about the next episode'
 ENDED = 'Canceled/Ended'
+
+# base url for downloading html
 NEXT_EPISODE_URL = 'https://next-episode.net/'
-FETCHING = 'Fetching info from %s ...%s'
+
+# used for date parsing
 MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
-'August', 'September', 'October', 'November', 'December']
+          'August', 'September', 'October', 'November', 'December']
 
-class Episode:
 
-    def __init__(self, id, max_id_length):
-        self.time = None
-        self.tba = False
-        self.ended = False
-        self.error = None
-        self.id = id
-        self.max_id_length = max_id_length
-        html = self.request_page()
-        if html:
-            self.parse_page(html)
+class Release:
+    def __init__(self, season: str = None, episode_num: str = None, episode_name: str = None, date: datetime = None):
+        self.season = season
+        self.episode_num = episode_num
+        self.episode_name = episode_name
+        self.date = date
 
-    def get_time_string(self, time):
+    def __str__(self):
+
+        if not self.episode_num and not self.season:
+            return ''
+        if self.episode_num is None:
+            e = self.episode_num
+        elif ',' in self.episode_num:
+            comma_separated = self.episode_num.split(',')
+            e = f'E{comma_separated[0].strip()}-{comma_separated[-1].strip()}'
+        elif not self.episode_num.isnumeric():
+            e = f'"{self.episode_num}"'
+        else:
+            e = f'E{self.episode_num}'
+        if self.date is not None:
+            d = self.date.strftime('%Y-%m-%d')
+        else:
+            d = self.date
+        return f'{d} S{self.season} {e}'
+
+
+class Show:
+    def __init__(self, show_id: str, previous: Release = None, next_: Release = None, error: Exception = None):
+        self.show_id = show_id
+        self.previous = previous
+        self.next_ = next_
+        self.error = error
+
+
+def request_page(show_id: str):
+    url = '%s%s' % (NEXT_EPISODE_URL, show_id)
+    try:
+        return requests.get(url).text
+    except Exception as e:
+        return e
+
+
+def process_release(html, element_id: str):
+    info = html.find(id=element_id)
+    if not info:
+        return Release()
+
+    html_text = info.get_text()
+
+    if element_id == 'next_episode':
+        if TBA in html_text or ENDED in html_text:
+            return Release()
+
+    # extract lines from the html obj of interest
+    element_lines = html_text.split('\n')
+
+    # we're only interested in non-empty strings with a ':' char
+    # (the : indicates a key-value pair)
+    keyval_lines = [l for l in element_lines if l and ":" in l]
+
+    # split each line by first ':' and trim the results
+    keyval_pairs = [
+        [v.strip() for v in keyval_line.split(':', 1)]
+        for keyval_line in keyval_lines
+    ]
+
+    # transform the key-value lists into a python dict
+    info_dict = {key: value for key, value in keyval_pairs}
+
+    def parse_time(time_str: str):
+        time = ' '.join(time_str.split(' ')[1:])
         for k in MONTHS:
             if k[:3] in time:
-                return datetime.strptime(time.replace(k[:3], k), '%B %d, %Y')
+                time = datetime.strptime(time.replace(k[:3], k), '%B %d, %Y')
+                break
+        return time
 
-    def request_page(self):
-        url = '%s%s' % (NEXT_EPISODE_URL, self.id)
-        print(FETCHING % (url, ' ' * self.max_id_length), end='\r')
-        try:
-            return request.urlopen(url).read().decode('utf-8')
-        except Exception as e:
-            self.error = e
+    return Release(
+        info_dict['Season'],
+        info_dict['Episode'],
+        info_dict['Name'],
+        parse_time(info_dict['Date']) if 'Date' in info_dict else parse_time(info_dict['Local Date'])
+    )
 
-    def parse_page(self, html):
 
-        if ENDED in html:
-            self.ended = True
-            return
-        elif TBA in html:
-            self.tba = True
-            return
-        info = BeautifulSoup(html, 'html.parser').find(id="next_episode")
-        if info:
-            lines = [l.strip() for l in info.get_text().split('\n') if l and not "Local Time" in l][1:-1]
-            self.name = lines[0].split(':')[1]
-            self.season = int(lines[3].split(':')[1])
-            episode_line = lines[4].split(':')[1]
-            try:
-                self.episode_id = ','.join(['E%02d'%e for e in [int(v.strip()) for v in episode_line.split(',')]])
-            except:
-                self.episode_id = episode_line
+def process_page(show_id: str, page: Union[str, Exception]):
+    if type(page) == Exception:
+        return Show(show_id, error=page)
+    try:
+        html = BeautifulSoup(page, 'html.parser')
+    except Exception as e:
+        print(e)
+        return Show(show_id, error=Exception("Failed to parse page: " + str(e)))
+    try:
+        prev = process_release(html, 'previous_episode')
+    except:
+        prev = None
+    try:
+        next_ = process_release(html, 'next_episode')
+    except:
+        next_ = None
+    return Show(show_id, prev, next_)
 
-            time_line = lines[2].replace("Local Date", "Date") if "Local Date" in lines[2] else lines[2]
-            self.time = self.get_time_string(' '.join(time_line.split(' ')[1:]))
-        else:
-            self.error = Exception('No episode info found')
 
-    def pretty(self):
-        pre = '%s%s' % (self.id, ' ' * (self.max_id_length - len(self.id)))
-        if self.tba:
-            print('%s To be announced' % pre)
-        elif self.ended:
-            print('%s Ended or cancelled' % pre)
-        elif self.error:
-            print('%s Error: %s' % (pre, str(self.error)))
-        else:
-            episode_code = 'S%02d %s' % (self.season, self.episode_id)
-            formated_time = str(self.time).split(' ')[0]
-            print('%s %s %s' % (pre, episode_code, formated_time))
+def sort_shows(show_map):
+    def customsort(a: Show, b: Show):
+        a_next = a.next_.date if a.next_ else None
+        b_next = b.next_.date if b.next_ else None
+        a_prev = a.previous.date if a.previous else None
+        b_prev = b.previous.date if b.previous else None
+        if a_next:
+            return a_next.timestamp() - b_next.timestamp() if b_next else -1
+        elif b_next:
+            return 1
+        elif a_prev:
+            return b_prev.timestamp() - a_prev.timestamp() if b_prev else -1
+        return 1 if b_prev else 0
 
-def getEpisodes(series_identifiers):
-    max_id_length = max([len(i) for i in series_identifiers])
-    spacing = (' ' * (max_id_length + 12))
-    print('Downloading episode infos...')
-    eps = [Episode(id, max_id_length) for id in series_identifiers]
-    print('Downloaded info for all episodes%s' % spacing)
-    return eps
+    return sorted([show_map[i] for i in show_map], key=functools.cmp_to_key(customsort))
 
-def printEpisodes(episodes):
-    print('- ' * 30)
-    for e in sorted([e for e in episodes if e.time], key=lambda e: e.time):
-        e.pretty()
-    for e in sorted([e for e in episodes if e.tba], key=lambda e: e.id):
-        e.pretty()
-    for e in sorted([e for e in episodes if e.ended], key=lambda e: e.id):
-        e.pretty()
-    for e in sorted([e for e in episodes if e.error], key=lambda e: e.id):
-        e.pretty()
+
+def print_result(show_list: List[Show]):
+    print(tabulate([[s.show_id, str(s.previous), str(s.next_)] for s in show_list],
+                   ['Show ID', 'Previous release', 'Next release']))
+
 
 def get_series_identifiers():
     with open(CONFIG_FILENAME) as f:
         return [l.strip() for l in f.read().split('\n')
                 if l and len(l.strip()) > 0]
 
+
 if __name__ == "__main__":
-    printEpisodes(getEpisodes(get_series_identifiers()))
+    # get list of shows from config file
+    ids = get_series_identifiers()
+    # parse Show instances from next-episode.net html pages
+    shows = {show_id: process_page(show_id, request_page(show_id)) for show_id in ids}
+    # sort the shows to the order in which they should be printed
+    sorted_shows = sort_shows(shows)
+    # finally, print the list of shows
+    print_result(sorted_shows)

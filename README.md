@@ -2,8 +2,7 @@
 
 A script that fetches information about next episodes of your favorite series from [next-episode.net](https://next-episode.net) and prints it to your terminal.
 
-The information includes the time of the next episode,
- or whether the show has ended/cancelled or the time of the next episode is yet to be announced.
+The information includes the times and codes of the previous and next episodes of each show when available. 
 
  This script piggy-backs off next-episode.net, and will stop working when next-episode.net changes their design.
 
