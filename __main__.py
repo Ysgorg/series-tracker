@@ -20,7 +20,7 @@ class Release:
         if self.episode_num is None:
             e = self.episode_num
         elif ',' in self.episode_num:
-            first, *, last = [x.strip() for x in self.episode_num.split(',')]
+            first, *x, last = [x.strip() for x in self.episode_num.split(',')]
             e = f'E{first}-{last}'
         elif not self.episode_num.isnumeric():
             e = f'"{self.episode_num}"'
